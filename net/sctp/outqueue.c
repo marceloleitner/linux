@@ -73,13 +73,14 @@ static void sctp_outq_flush(struct sctp_outq *q, int rtx_timeout, gfp_t gfp);
 static inline void sctp_outq_head_data(struct sctp_outq *q,
 				       struct sctp_chunk *ch)
 {
+	__u16 stream = sctp_chunk_stream_no(ch);
 	struct sctp_stream_out_ext *oute;
-	__u16 stream;
+
+	pr_debug("%s stream: %d ch: %p\n", __func__, stream, ch);
 
 	list_add(&ch->list, &q->out_chunk_list);
 	q->out_qlen += ch->skb->len;
 
-	stream = sctp_chunk_stream_no(ch);
 	oute = q->asoc->stream.out[stream].ext;
 	list_add(&ch->stream_list, &oute->outq);
 }
