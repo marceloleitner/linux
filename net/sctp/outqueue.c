@@ -1275,7 +1275,6 @@ int sctp_outq_sack(struct sctp_outq *q, struct sctp_chunk *chunk)
 	__u32 sack_a_rwnd;
 	unsigned int outstanding;
 	int gap_ack_blocks, active_transports = 0;
-	u8 accum_moved = 0;
 
 	/* Grab the association's destination address list. */
 	transport_list = &asoc->peer.transport_addr_list;
@@ -1321,14 +1320,10 @@ int sctp_outq_sack(struct sctp_outq *q, struct sctp_chunk *chunk)
 	/* Move the Cumulative TSN Ack Point if appropriate.  */
 	if (TSN_lt(asoc->ctsn_ack_point, sack_ctsn)) {
 		asoc->ctsn_ack_point = sack_ctsn;
-		accum_moved = 1;
 	}
 
 	if (gap_ack_blocks) {
 		__u8 pdus_sacked = chunk->chunk_hdr->flags;
-
-		if (asoc->fast_recovery && accum_moved)
-			highest_new_tsn = highest_tsn;
 
 		list_for_each_entry(transport, transport_list, transports)
 			sctp_mark_missing(q, &transport->transmitted, transport,
@@ -1702,13 +1697,10 @@ static bool sctp_check_transmitted(struct sctp_outq *q,
 				 sack_ctsn,
 				 transport->sfr.pseudo_cumack - sack_ctsn);
 			/* FIXME: CUCv2 misses detail on which cumack should be
-			 * used. rtx or normal one.
-			 * _raise_cwnd will compare it against a value in asoc->,
-			 * so it cannot use a transport-specific ctsn otherwise
-			 * it may exit fast recovery too early.
+			 * used, rtx or normal one.
 			 */
 			sctp_transport_raise_cwnd(transport,
-						  sack_ctsn,
+						  transport->sfr.pseudo_cumack,
 						  bytes_acked);
 
 			transport->flight_size -= bytes_acked;
