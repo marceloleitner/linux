@@ -714,6 +714,28 @@ struct sctp_flush_ctx {
 	gfp_t gfp;
 };
 
+static void __sctp_outq_select_transport(struct sctp_flush_ctx *ctx,
+					 struct sctp_transport *new)
+{
+	pr_debug("%s: switching asoc %p to transport %p\n", __func__,
+		 ctx->asoc, new);
+
+	ctx->transport = new;
+	ctx->packet = &ctx->transport->packet;
+
+	if (list_empty(&ctx->transport->send_ready))
+		list_add_tail(&ctx->transport->send_ready,
+			      &ctx->transport_list);
+
+	sctp_packet_config(ctx->packet,
+			   ctx->asoc->peer.i.init_tag,
+			   ctx->asoc->peer.ecn_capable);
+	/* We've switched transports, so apply the
+	 * Burst limit to the new transport.
+	 */
+	sctp_transport_burst_limited(ctx->transport);
+}
+
 /* transport: current transport */
 static void sctp_outq_select_transport(struct sctp_flush_ctx *ctx,
 				       struct sctp_chunk *chunk)
@@ -743,7 +765,8 @@ static void sctp_outq_select_transport(struct sctp_flush_ctx *ctx,
 		 * use the current active path.
 		 */
 		if (!new_transport)
-			new_transport = ctx->asoc->peer.active_path;
+			new_transport = ctx->transport ?:
+					ctx->asoc->peer.active_path;
 	} else {
 		__u8 type;
 
@@ -776,32 +799,85 @@ static void sctp_outq_select_transport(struct sctp_flush_ctx *ctx,
 	}
 
 	/* Are we switching transports? Take care of transport locks. */
-	if (new_transport != ctx->transport) {
-		ctx->transport = new_transport;
-		ctx->packet = &ctx->transport->packet;
+	if (new_transport != ctx->transport)
+		__sctp_outq_select_transport(ctx, new_transport);
+}
 
-		if (list_empty(&ctx->transport->send_ready))
-			list_add_tail(&ctx->transport->send_ready,
-				      &ctx->transport_list);
+#define CMT_PACKET
+//#define CMT_CWND
+#define CMT_SELECT_RR
+//#define CMT_SELECT_CWND
 
-		sctp_packet_config(ctx->packet,
-				   ctx->asoc->peer.i.init_tag,
-				   ctx->asoc->peer.ecn_capable);
-		/* We've switched transports, so apply the
-		 * Burst limit to the new transport.
+static bool sctp_outq_select_next_transport(struct sctp_flush_ctx *ctx)
+{
+	struct list_head *transport_list = &ctx->asoc->peer.transport_addr_list;
+	struct sctp_transport *new_transport = NULL, *t = ctx->transport;
+#ifdef CMT_SELECT_CWND
+	__u32 cwnd = 0;
+#endif
+
+	pr_debug("%s\n", __func__);
+
+again:
+	list_for_each_entry_continue(t, transport_list, transports) {
+#ifdef CMT_SELECT_CWND
+		__u32 tmp_cwnd;
+#endif
+
+		if (t == ctx->transport)
+			break;
+
+		/* Check if transport is already scheduled for sending. If yes,
+		 * means it was already used in this cycle.
 		 */
-		sctp_transport_burst_limited(ctx->transport);
+		if (!list_empty(&ctx->transport->send_ready))
+			continue;
+
+#ifdef CMT_SELECT_CWND
+		if (t->cwnd > t->flight_size)
+			tmp_cwnd = t->cwnd - t->flight_size;
+		else
+			tmp_cwnd = 0;
+		if (tmp_cwnd > cwnd) {
+			cwnd = tmp_cwnd;
+			new_transport = t;
+		}
+#elif defined(CMT_SELECT_RR)
+		if (t->cwnd > t->flight_size) {
+			new_transport = t;
+			break;
+		}
+#endif
 	}
+	if (&t->transports == transport_list)
+		goto again;
+
+	if (!new_transport)
+		return false;
+
+	__sctp_outq_select_transport(ctx, new_transport);
+	ctx->asoc->peer.active_path = new_transport;
+	return true;
 }
 
 static void sctp_outq_transmit_packet(struct sctp_flush_ctx *ctx,
 				      struct sctp_packet *packet)
 {
+#ifdef CMT_PACKET
+	bool has_data = ctx->packet->has_data;
+#endif
 	int error;
 
 	error = sctp_packet_transmit(packet, ctx->gfp);
 	if (error < 0)
 		ctx->q->asoc->base.sk->sk_err = -error;
+
+	list_del_init(&ctx->transport->send_ready);
+
+#ifdef CMT_PACKET
+	if (has_data)
+		sctp_outq_select_next_transport(ctx);
+#endif
 }
 
 static enum sctp_xmit sctp_outq_transmit_chunk(struct sctp_flush_ctx *ctx,
@@ -823,6 +899,13 @@ static enum sctp_xmit sctp_outq_transmit_chunk(struct sctp_flush_ctx *ctx,
 
 		if (!one_packet)
 			ret = sctp_packet_append_chunk(ctx->packet, chunk);
+
+#ifdef CMT_CWND
+		if (ret == SCTP_XMIT_PMTU_FULL && ctx->packet->has_data) {
+			sctp_outq_select_next_transport(ctx);
+			ret = sctp_packet_append_chunk(ctx->packet, chunk);
+		}
+#endif
 	}
 
 out:
@@ -1092,6 +1175,9 @@ static void sctp_outq_flush_data(struct sctp_flush_ctx *ctx,
 		if (ctx->packet->has_cookie_echo)
 			break;
 	}
+
+	if (!chunk)
+		pr_debug("outq depleted\n");
 }
 
 static void sctp_outq_flush_transports(struct sctp_flush_ctx *ctx)
