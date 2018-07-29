@@ -884,11 +884,47 @@ static void sctp_outq_select_transport(struct sctp_flush_ctx *ctx,
 	}
 }
 
+static void sctp_outq_transmit_packet(struct sctp_flush_ctx *ctx,
+				      struct sctp_packet *packet)
+{
+	int error;
+
+	error = sctp_packet_transmit(packet, ctx->gfp);
+	if (error < 0)
+		ctx->q->asoc->base.sk->sk_err = -error;
+}
+
+static enum sctp_xmit sctp_outq_transmit_chunk(struct sctp_flush_ctx *ctx,
+					       struct sctp_chunk *chunk,
+					       bool one_packet)
+{
+	enum sctp_xmit ret;
+
+	pr_debug("%s: packet:%p size:%zu chunk:%p size:%d\n", __func__,
+		 ctx->packet, ctx->packet->size, chunk,
+		 chunk->skb ? chunk->skb->len : -1);
+
+	ret = sctp_packet_append_chunk(ctx->packet, chunk);
+	if (ret == SCTP_XMIT_PMTU_FULL) {
+		if (ctx->packet->has_cookie_echo)
+			goto out;
+
+		sctp_outq_transmit_packet(ctx, ctx->packet);
+
+		if (!one_packet)
+			ret = sctp_packet_append_chunk(ctx->packet, chunk);
+	}
+
+out:
+	return ret;
+}
+
 static void sctp_outq_flush_ctrl(struct sctp_flush_ctx *ctx)
 {
 	struct sctp_chunk *chunk, *tmp;
 	enum sctp_xmit status;
-	int one_packet, error;
+	bool one_packet;
+	int error;
 
 	list_for_each_entry_safe(chunk, tmp, &ctx->q->control_chunk_list, list) {
 		one_packet = 0;
@@ -944,7 +980,7 @@ static void sctp_outq_flush_ctrl(struct sctp_flush_ctx *ctx)
 		case SCTP_CID_ERROR:
 		case SCTP_CID_ECN_CWR:
 		case SCTP_CID_ASCONF_ACK:
-			one_packet = 1;
+			one_packet = true;
 			/* Fall through */
 
 		case SCTP_CID_SACK:
@@ -955,8 +991,7 @@ static void sctp_outq_flush_ctrl(struct sctp_flush_ctx *ctx)
 		case SCTP_CID_FWD_TSN:
 		case SCTP_CID_I_FWD_TSN:
 		case SCTP_CID_RECONF:
-			status = sctp_packet_transmit_chunk(ctx->packet, chunk,
-							    one_packet, ctx->gfp);
+			status = sctp_outq_transmit_chunk(ctx, chunk, one_packet);
 			if (status != SCTP_XMIT_OK) {
 				/* put the chunk back */
 				list_add(&chunk->list, &ctx->q->control_chunk_list);
@@ -1106,8 +1141,7 @@ static void sctp_outq_flush_data(struct sctp_flush_ctx *ctx,
 			 refcount_read(&chunk->skb->users) : -1);
 
 		/* Add the chunk to the packet.  */
-		status = sctp_packet_transmit_chunk(ctx->packet, chunk, 0,
-						    ctx->gfp);
+		status = sctp_outq_transmit_chunk(ctx, chunk, true);
 		if (status != SCTP_XMIT_OK) {
 			/* We could not append this chunk, so put
 			 * the chunk back on the output queue.
@@ -1155,16 +1189,12 @@ static void sctp_outq_flush_transports(struct sctp_flush_ctx *ctx)
 	struct list_head *ltransport;
 	struct sctp_packet *packet;
 	struct sctp_transport *t;
-	int error = 0;
 
 	while ((ltransport = sctp_list_dequeue(&ctx->transport_list)) != NULL) {
 		t = list_entry(ltransport, struct sctp_transport, send_ready);
 		packet = &t->packet;
-		if (!sctp_packet_empty(packet)) {
-			error = sctp_packet_transmit(packet, ctx->gfp);
-			if (error < 0)
-				ctx->q->asoc->base.sk->sk_err = -error;
-		}
+		if (!sctp_packet_empty(packet))
+			sctp_outq_transmit_packet(ctx, packet);
 
 		/* Clear the burst limited state, if any */
 		sctp_transport_burst_reset(t);

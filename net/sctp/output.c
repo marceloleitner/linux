@@ -174,49 +174,6 @@ void sctp_packet_free(struct sctp_packet *packet)
 	}
 }
 
-/* This routine tries to append the chunk to the offered packet. If adding
- * the chunk causes the packet to exceed the path MTU and COOKIE_ECHO chunk
- * is not present in the packet, it transmits the input packet.
- * Data can be bundled with a packet containing a COOKIE_ECHO chunk as long
- * as it can fit in the packet, but any more data that does not fit in this
- * packet can be sent only after receiving the COOKIE_ACK.
- */
-enum sctp_xmit sctp_packet_transmit_chunk(struct sctp_packet *packet,
-					  struct sctp_chunk *chunk,
-					  int one_packet, gfp_t gfp)
-{
-	enum sctp_xmit retval;
-
-	pr_debug("%s: packet:%p size:%zu chunk:%p size:%d\n", __func__,
-		 packet, packet->size, chunk, chunk->skb ? chunk->skb->len : -1);
-
-	switch ((retval = (sctp_packet_append_chunk(packet, chunk)))) {
-	case SCTP_XMIT_PMTU_FULL:
-		if (!packet->has_cookie_echo) {
-			int error = 0;
-
-			error = sctp_packet_transmit(packet, gfp);
-			if (error < 0)
-				chunk->skb->sk->sk_err = -error;
-
-			/* If we have an empty packet, then we can NOT ever
-			 * return PMTU_FULL.
-			 */
-			if (!one_packet)
-				retval = sctp_packet_append_chunk(packet,
-								  chunk);
-		}
-		break;
-
-	case SCTP_XMIT_RWND_FULL:
-	case SCTP_XMIT_OK:
-	case SCTP_XMIT_DELAY:
-		break;
-	}
-
-	return retval;
-}
-
 /* Try to bundle an auth chunk into the packet. */
 static enum sctp_xmit sctp_packet_bundle_auth(struct sctp_packet *pkt,
 					      struct sctp_chunk *chunk)
