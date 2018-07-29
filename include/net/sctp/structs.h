@@ -946,7 +946,7 @@ struct sctp_transport {
 	/* This is the list of transports that have chunks to send.  */
 	struct list_head send_ready;
 
-	/* State information saved for SFR algorithm. The key
+	/* State information saved for SFR and CUCv2 algorithms. The key
 	 * idea in SFR is to understand if SACK GAPs are due
 	 * to reordering on multi-path transmission or not,
 	 * being it because of CMT or just path changeover.
@@ -959,6 +959,18 @@ struct sctp_transport {
 		 * a SACK to estimate the causative TSN(s)'s group.
 		 */
 		char saw_newack;
+
+		/* Earliest outstanding TSN */
+		__u32 pseudo_cumack;
+		__u32 rtx_pseudo_cumack;
+
+		/* Flag that indicates if a new pseudo_cumack has been received */
+		char new_pseudo_cumack;
+		char new_rtx_pseudo_cumack;
+
+		/* Flag to trigger a search for a new pseudo_cumack */
+		char find_pseudo_cumack;
+		char find_rtx_pseudo_cumack;
 	} sfr;
 
 	/* 64-bit random number sent with heartbeat. */
