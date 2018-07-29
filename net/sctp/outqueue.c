@@ -1528,6 +1528,8 @@ static void sctp_check_transmitted(struct sctp_outq *q,
 
 				tchunk->tsn_gap_acked = 0;
 
+				/* FIXME: DAC: Should we do anything? */
+
 				if (tchunk->transport) {
 					bytes_acked -= sctp_data_size(tchunk);
 

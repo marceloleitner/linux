@@ -1826,6 +1826,9 @@ struct sctp_association {
 	/* Flag to track the current fast recovery state */
 	__u8 fast_recovery;
 
+	/* DAC: how many PDUs we received since we last sent a SACK */
+	__u8 new_pdus;
+
 	/* The number of unacknowledged data chunks.  Reported through
 	 * the SCTP_STATUS sockopt.
 	 */

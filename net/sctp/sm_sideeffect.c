@@ -176,8 +176,13 @@ static int sctp_gen_sack(struct sctp_association *asoc, int force,
 	 * [This is actually not mentioned in Section 6, but we
 	 * implement it here anyway. --piggy]
 	 */
+#if 0
+	/* Disable fast SACK in case of reordering, for CMT.
+	 * FIXME: Needs a better implementation
+	 */
 	if (max_tsn_seen != ctsn)
 		asoc->peer.sack_needed = 1;
+#endif
 
 	/* From 6.2  Acknowledgement on Reception of DATA Chunks:
 	 *
