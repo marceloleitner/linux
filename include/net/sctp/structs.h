@@ -960,6 +960,9 @@ struct sctp_transport {
 		 */
 		char saw_newack;
 
+		/* Earliest SACKed TSN, for DAC handling */
+		__u32 earliest_tsn;
+
 		/* Earliest outstanding TSN */
 		__u32 pseudo_cumack;
 		__u32 rtx_pseudo_cumack;
