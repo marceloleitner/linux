@@ -660,8 +660,9 @@ static int __sctp_outq_flush_rtx(struct sctp_outq *q, struct sctp_packet *pkt,
 		 * next chunk.
 		 */
 		if (chunk->tsn_gap_acked) {
-			list_move_tail(&chunk->transmitted_list,
-				       &transport->transmitted);
+			list_del_init(&chunk->transmitted_list);
+			sctp_insert_list(&transport->transmitted,
+					 &chunk->transmitted_list);
 			continue;
 		}
 
@@ -725,8 +726,9 @@ redo:
 			/* The append was successful, so add this chunk to
 			 * the transmitted list.
 			 */
-			list_move_tail(&chunk->transmitted_list,
-				       &transport->transmitted);
+			list_del_init(&chunk->transmitted_list);
+			sctp_insert_list(&transport->transmitted,
+					 &chunk->transmitted_list);
 
 			/* Mark the chunk as ineligible for fast retransmit
 			 * after it is retransmitted.
