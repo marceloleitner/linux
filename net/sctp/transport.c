@@ -668,6 +668,8 @@ void sctp_transport_reset(struct sctp_transport *t)
 	/* Initialize the state information for SFR */
 	t->sfr.highest_in_sack = 0;
 	t->sfr.saw_newack = 0;
+	t->sfr.find_pseudo_cumack = 1;
+	t->sfr.find_rtx_pseudo_cumack = 1;
 }
 
 /* Schedule retransmission on the given transport */

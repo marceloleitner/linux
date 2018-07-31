@@ -53,7 +53,7 @@
 #include <net/sctp/stream_sched.h>
 
 /* Declare internal functions here.  */
-static int sctp_acked(struct sctp_sackhdr *sack, __u32 tsn);
+static int sctp_acked(struct sctp_sackhdr *sack, __u32 tsn, bool *gap);
 static bool sctp_check_transmitted(struct sctp_outq *q,
 				   struct list_head *transmitted_queue,
 				   struct sctp_transport *transport,
@@ -1296,9 +1296,12 @@ int sctp_outq_sack(struct sctp_outq *q, struct sctp_chunk *chunk)
 	gap_ack_blocks = ntohs(sack->num_gap_ack_blocks);
 	asoc->stats.gapcnt += gap_ack_blocks;
 
-	/* SFR algorithm */
-	list_for_each_entry(transport, transport_list, transports)
+	/* SFR and CUCv2 algorithms */
+	list_for_each_entry(transport, transport_list, transports) {
 		transport->sfr.saw_newack = 0;
+		transport->sfr.new_pseudo_cumack = 0;
+		transport->sfr.new_rtx_pseudo_cumack = 0;
+	}
 
 	/* Get the highest TSN in the sack. */
 	highest_tsn = sack_ctsn;
@@ -1359,7 +1362,10 @@ int sctp_outq_sack(struct sctp_outq *q, struct sctp_chunk *chunk)
 		tchunk = list_entry(lchunk, struct sctp_chunk,
 				    transmitted_list);
 		tsn = ntohl(tchunk->subh.data_hdr->tsn);
+		/* FIXME: NR-SACK has to use ctsn per transport */
 		if (TSN_lte(tsn, ctsn)) {
+		//NR-SACK version:
+		//if (TSN_lte(tsn, tchunk->transport->sfr.pseudo_cumack)) {
 			list_del_init(&tchunk->transmitted_list);
 			if (asoc->peer.prsctp_capable &&
 			    SCTP_PR_PRIO_ENABLED(chunk->sinfo.sinfo_flags))
@@ -1434,7 +1440,7 @@ static bool sctp_check_transmitted(struct sctp_outq *q,
 	__u8 restart_timer = 0;
 	int bytes_acked = 0;
 	int migrate_bytes = 0;
-	bool forward_progress = false;
+	bool gap, forward_progress = false;
 
 	sack_ctsn = ntohl(sack->cum_tsn_ack);
 	if (transport)
@@ -1465,7 +1471,8 @@ static bool sctp_check_transmitted(struct sctp_outq *q,
 		}
 
 		tsn = ntohl(tchunk->subh.data_hdr->tsn);
-		if (sctp_acked(sack, tsn)) {
+
+		if (sctp_acked(sack, tsn, &gap)) {
 			/* If this queue is the retransmit queue, the
 			 * retransmit timer has already reclaimed
 			 * the outstanding bytes for this chunk, so only
@@ -1518,12 +1525,71 @@ static bool sctp_check_transmitted(struct sctp_outq *q,
 						transport->sfr.earliest_tsn = tsn;
 					}
 				}
+
+#if 1
+				/* XXX: TSN_lt(q->asoc->ctsn_ack_point, sack_ctsn) == !gap */
+				if (TSN_lt(q->asoc->ctsn_ack_point, sack_ctsn) &&
+				    TSN_lte(tsn, sack_ctsn)) {
+					/* CUCv2, 2.ii */
+					tchunk->transport->sfr.find_pseudo_cumack = 1;
+					tchunk->transport->sfr.find_rtx_pseudo_cumack = 1;
+					/* CUCv2, 2.ii */
+					tchunk->transport->sfr.new_pseudo_cumack = 1;
+					tchunk->transport->sfr.new_rtx_pseudo_cumack = 1;
+#if 0
+					/* My hack */
+					tchunk->transport->sfr.pseudo_cumack = tsn;
+					tchunk->transport->sfr.rtx_pseudo_cumack = tsn;
+#endif
+				}
+
+				/* CUCv2, 3.ii */
+				if (transport && tchunk->transport->sfr.find_pseudo_cumack &&
+				    //!tchunk->tsn_gap_acked &&  // Check is
+				    //always false here and we don't need to do
+				    //it, because this is only executed if this
+				    //condition was met.
+				    !gap &&
+				    !sctp_chunk_retransmitted(tchunk)) {
+					tchunk->transport->sfr.pseudo_cumack = tsn;
+					tchunk->transport->sfr.find_pseudo_cumack = 0;
+				}
+
+				/* CUCv2, 3.iii */
+				if (/*transport &&*/ gap &&
+				    tchunk->transport->sfr.pseudo_cumack == tsn) {
+					tchunk->transport->sfr.new_pseudo_cumack = 1;
+					tchunk->transport->sfr.find_pseudo_cumack = 1;
+				}
+				/* CUCv2, 3.iv */
+				if (/*!transport &&*/
+				    tchunk->transport->sfr.find_rtx_pseudo_cumack &&
+				    sctp_chunk_retransmitted(tchunk)) {
+					tchunk->transport->sfr.rtx_pseudo_cumack = tsn;
+					tchunk->transport->sfr.find_rtx_pseudo_cumack = 0;
+				}
+				/* CUCv2, 3.v */
+				if (/*!transport &&*/ gap &&
+				    tchunk->transport->sfr.rtx_pseudo_cumack == tsn) {
+					tchunk->transport->sfr.new_rtx_pseudo_cumack = 1;
+					tchunk->transport->sfr.find_rtx_pseudo_cumack = 1;
+				}
+#endif
 			}
 
 			if (transport && TSN_lt(transport->sfr.highest_in_sack, tsn))
 				transport->sfr.highest_in_sack = tsn;
 
+#if 0
+			__u32 cack;
+			if (transport)
+				cack = transport->sfr.pseudo_cumack;
+			else
+				cack = sack_ctsn;
+			if (TSN_lte(tsn, cack)) {
+#else
 			if (TSN_lte(tsn, sack_ctsn)) {
+#endif
 				/* RFC 2960  6.3.2 Retransmission Timer Rules
 				 *
 				 * R3) Whenever a SACK is received
@@ -1638,7 +1704,21 @@ static bool sctp_check_transmitted(struct sctp_outq *q,
 					SCTP_RECEIVED_SACK);
 			}
 
-			sctp_transport_raise_cwnd(transport, sack_ctsn,
+			/* XXX: CUCv2 misses detail on which cumack should be
+			 * used, rtx or normal one. As it says it should only
+			 * be used for cwnd growth, exiting FastRecover may
+			 * just be out of scope. Needs clarification.
+			 * Now that fast retransmissions are per transport, we
+			 * could easily use the transport-specific cumsack
+			 * from SFR and exit FastRecover faster if possible,
+			 * but all I had were worse numbers with it.
+			 */
+			sctp_transport_raise_cwnd(transport,
+#if 0
+						  transport->sfr.pseudo_cumack,
+#else
+						  sack_ctsn,
+#endif
 						  bytes_acked);
 
 			transport->flight_size -= bytes_acked;
@@ -1761,12 +1841,14 @@ static void sctp_mark_missing(struct sctp_outq *q,
 }
 
 /* Is the given TSN acked by this packet?  */
-static int sctp_acked(struct sctp_sackhdr *sack, __u32 tsn)
+static int sctp_acked(struct sctp_sackhdr *sack, __u32 tsn, bool *gap)
 {
 	__u32 ctsn = ntohl(sack->cum_tsn_ack);
 	union sctp_sack_variable *frags;
 	__u16 tsn_offset, blocks;
 	int i;
+
+	*gap = false;
 
 	if (TSN_lte(tsn, ctsn))
 		goto pass;
@@ -1783,6 +1865,7 @@ static int sctp_acked(struct sctp_sackhdr *sack, __u32 tsn)
 	 *  Block are assumed to have been received correctly.
 	 */
 
+	*gap = true;
 	frags = sack->variable;
 	blocks = ntohs(sack->num_gap_ack_blocks);
 	tsn_offset = tsn - ctsn;
