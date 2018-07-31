@@ -6449,6 +6449,8 @@ static int sctp_eat_data(const struct sctp_association *asoc,
 	}
 
 	chunk->data_accepted = 1;
+	if (chunk->asoc)
+		chunk->asoc->new_pdus++;
 
 	/* Note: Some chunks may get overcounted (if we drop) or overcounted
 	 * if we renege and the chunk arrives again.

@@ -790,9 +790,13 @@ struct sctp_chunk *sctp_make_sack(struct sctp_association *asoc)
 		+ sizeof(__u32) * num_dup_tsns;
 
 	/* Create the chunk.  */
-	retval = sctp_make_control(asoc, SCTP_CID_SACK, 0, len, GFP_ATOMIC);
+	/* FIXME: CMT RFC doesn't yet say how many bits we can use */
+	retval = sctp_make_control(asoc, SCTP_CID_SACK, asoc->new_pdus, len,
+				   GFP_ATOMIC);
 	if (!retval)
 		goto nodata;
+
+	asoc->new_pdus = 0;
 
 	/* RFC 2960 6.4 Multi-homed SCTP Endpoints
 	 *
