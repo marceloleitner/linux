@@ -58,13 +58,12 @@ static bool sctp_check_transmitted(struct sctp_outq *q,
 				   struct list_head *transmitted_queue,
 				   struct sctp_transport *transport,
 				   union sctp_addr *saddr,
-				   struct sctp_sackhdr *sack,
-				   __u32 *highest_new_tsn);
+				   struct sctp_sackhdr *sack);
 
 static void sctp_mark_missing(struct sctp_outq *q,
 			      struct list_head *transmitted_queue,
 			      struct sctp_transport *transport,
-			      __u32 highest_new_tsn, __u8 pdus_sacked,
+			      __u8 pdus_sacked,
 			      bool same_path);
 
 static void sctp_outq_flush(struct sctp_outq *q, int rtx_timeout, gfp_t gfp);
@@ -1271,7 +1270,7 @@ int sctp_outq_sack(struct sctp_outq *q, struct sctp_chunk *chunk)
 	struct list_head *lchunk, *transport_list, *temp;
 	union sctp_sack_variable *frags = sack->variable;
 	__u32 sack_ctsn, ctsn, tsn;
-	__u32 highest_tsn, highest_new_tsn;
+	__u32 highest_tsn;
 	__u32 sack_a_rwnd;
 	unsigned int outstanding;
 	int gap_ack_blocks, active_transports = 0;
@@ -1298,12 +1297,10 @@ int sctp_outq_sack(struct sctp_outq *q, struct sctp_chunk *chunk)
 	if (TSN_lt(asoc->highest_sacked, highest_tsn))
 		asoc->highest_sacked = highest_tsn;
 
-	highest_new_tsn = sack_ctsn;
-
 	/* Run through the retransmit queue.  Credit bytes received
 	 * and free those chunks that we can.
 	 */
-	sctp_check_transmitted(q, &q->retransmit, NULL, NULL, sack, &highest_new_tsn);
+	sctp_check_transmitted(q, &q->retransmit, NULL, NULL, sack);
 
 	/* Run through the transmitted queue.
 	 * Credit bytes received and free those chunks which we can.
@@ -1312,8 +1309,7 @@ int sctp_outq_sack(struct sctp_outq *q, struct sctp_chunk *chunk)
 	 */
 	list_for_each_entry(transport, transport_list, transports) {
 		if (sctp_check_transmitted(q, &transport->transmitted,
-					   transport, &chunk->source, sack,
-					   &highest_new_tsn))
+					   transport, &chunk->source, sack))
 			active_transports++;
 	}
 
@@ -1327,8 +1323,7 @@ int sctp_outq_sack(struct sctp_outq *q, struct sctp_chunk *chunk)
 
 		list_for_each_entry(transport, transport_list, transports)
 			sctp_mark_missing(q, &transport->transmitted, transport,
-					  highest_new_tsn, pdus_sacked,
-					  active_transports == 1);
+					  pdus_sacked, false);
 	}
 
 	/* Update unack_data field in the assoc. */
@@ -1407,8 +1402,7 @@ static bool sctp_check_transmitted(struct sctp_outq *q,
 				   struct list_head *transmitted_queue,
 				   struct sctp_transport *transport,
 				   union sctp_addr *saddr,
-				   struct sctp_sackhdr *sack,
-				   __u32 *highest_new_tsn_in_sack)
+				   struct sctp_sackhdr *sack)
 {
 	struct list_head *lchunk;
 	struct sctp_chunk *tchunk;
@@ -1488,8 +1482,6 @@ static bool sctp_check_transmitted(struct sctp_outq *q,
 			if (!tchunk->tsn_gap_acked) {
 				tchunk->tsn_gap_acked = 1;
 				forward_progress = true;
-				if (TSN_lt(*highest_new_tsn_in_sack, tsn))
-					*highest_new_tsn_in_sack = tsn;
 				bytes_acked += sctp_data_size(tchunk);
 				if (!tchunk->transport)
 					migrate_bytes += sctp_data_size(tchunk);
@@ -1764,7 +1756,7 @@ static bool sctp_check_transmitted(struct sctp_outq *q,
 static void sctp_mark_missing(struct sctp_outq *q,
 			      struct list_head *transmitted_queue,
 			      struct sctp_transport *transport,
-			      __u32 highest_new_tsn_in_sack, __u8 pdus_sacked,
+			      __u8 pdus_sacked,
 			      bool same_path)
 {
 	char do_fast_retransmit = 0;
@@ -1784,7 +1776,7 @@ static void sctp_mark_missing(struct sctp_outq *q,
 		 */
 		if (chunk->fast_retransmit == SCTP_CAN_FRTX &&
 		    !chunk->tsn_gap_acked &&
-		    TSN_lt(tsn, highest_new_tsn_in_sack)) {
+		    TSN_lt(tsn, transport->sfr.highest_in_sack)) {
 
 			/* SFR may require us to skip marking this chunk as
 			 * missing.
