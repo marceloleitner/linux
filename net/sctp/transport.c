@@ -666,11 +666,9 @@ void sctp_transport_reset(struct sctp_transport *t)
 	t->rto_pending = 0;
 	t->hb_sent = 0;
 
-	/* Initialize the state information for SFR-CACC */
-	t->cacc.changeover_active = 0;
-	t->cacc.cycling_changeover = 0;
-	t->cacc.next_tsn_at_change = 0;
-	t->cacc.cacc_saw_newack = 0;
+	/* Initialize the state information for SFR */
+	t->sfr.highest_in_sack = 0;
+	t->sfr.saw_newack = 0;
 }
 
 /* Schedule retransmission on the given transport */
