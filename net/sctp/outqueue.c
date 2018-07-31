@@ -54,7 +54,7 @@
 
 /* Declare internal functions here.  */
 static int sctp_acked(struct sctp_sackhdr *sack, __u32 tsn);
-static void sctp_check_transmitted(struct sctp_outq *q,
+static bool sctp_check_transmitted(struct sctp_outq *q,
 				   struct list_head *transmitted_queue,
 				   struct sctp_transport *transport,
 				   union sctp_addr *saddr,
@@ -64,7 +64,8 @@ static void sctp_check_transmitted(struct sctp_outq *q,
 static void sctp_mark_missing(struct sctp_outq *q,
 			      struct list_head *transmitted_queue,
 			      struct sctp_transport *transport,
-			      __u32 highest_new_tsn);
+			      __u32 highest_new_tsn, __u8 pdus_sacked,
+			      bool same_path);
 
 static void sctp_outq_flush(struct sctp_outq *q, int rtx_timeout, gfp_t gfp);
 
@@ -1189,7 +1190,7 @@ int sctp_outq_sack(struct sctp_outq *q, struct sctp_chunk *chunk)
 	__u32 highest_tsn, highest_new_tsn;
 	__u32 sack_a_rwnd;
 	unsigned int outstanding;
-	int gap_ack_blocks;
+	int gap_ack_blocks, active_transports = 0;
 	u8 accum_moved = 0;
 
 	/* Grab the association's destination address list. */
@@ -1224,9 +1225,10 @@ int sctp_outq_sack(struct sctp_outq *q, struct sctp_chunk *chunk)
 	 * This is a MASSIVE candidate for optimization.
 	 */
 	list_for_each_entry(transport, transport_list, transports) {
-		sctp_check_transmitted(q, &transport->transmitted,
-				       transport, &chunk->source, sack,
-				       &highest_new_tsn);
+		if (sctp_check_transmitted(q, &transport->transmitted,
+					   transport, &chunk->source, sack,
+					   &highest_new_tsn))
+			active_transports++;
 	}
 
 	/* Move the Cumulative TSN Ack Point if appropriate.  */
@@ -1236,13 +1238,15 @@ int sctp_outq_sack(struct sctp_outq *q, struct sctp_chunk *chunk)
 	}
 
 	if (gap_ack_blocks) {
+		__u8 pdus_sacked = chunk->chunk_hdr->flags;
 
 		if (asoc->fast_recovery && accum_moved)
 			highest_new_tsn = highest_tsn;
 
 		list_for_each_entry(transport, transport_list, transports)
 			sctp_mark_missing(q, &transport->transmitted, transport,
-					  highest_new_tsn);
+					  highest_new_tsn, pdus_sacked,
+					  active_transports == 1);
 	}
 
 	/* Update unack_data field in the assoc. */
@@ -1314,7 +1318,7 @@ int sctp_outq_is_empty(const struct sctp_outq *q)
  * transmitted_queue, we print a range: SACKED: TSN1-TSN2, TSN3, TSN4-TSN5.
  * KEPT TSN6-TSN7, etc.
  */
-static void sctp_check_transmitted(struct sctp_outq *q,
+static bool sctp_check_transmitted(struct sctp_outq *q,
 				   struct list_head *transmitted_queue,
 				   struct sctp_transport *transport,
 				   union sctp_addr *saddr,
@@ -1409,8 +1413,10 @@ static void sctp_check_transmitted(struct sctp_outq *q,
 				 * here).
 				 */
 				else if (transport) {
-					if (!transport->sfr.saw_newack)
+					if (!transport->sfr.saw_newack) {
 						transport->sfr.saw_newack = 1;
+						transport->sfr.earliest_tsn = tsn;
+					}
 				}
 			}
 
@@ -1588,20 +1594,16 @@ static void sctp_check_transmitted(struct sctp_outq *q,
 	}
 
 	list_splice(&tlist, transmitted_queue);
-}
 
-static bool sctp_sfr_hit(struct sctp_transport *transport, __u32 tsn)
-{
-	return !transport ||
-	       (transport->sfr.saw_newack &&
-		TSN_lt(tsn, transport->sfr.highest_in_sack));
+	return forward_progress;
 }
 
 /* Mark chunks as missing and consequently may get retransmitted. */
 static void sctp_mark_missing(struct sctp_outq *q,
 			      struct list_head *transmitted_queue,
 			      struct sctp_transport *transport,
-			      __u32 highest_new_tsn_in_sack)
+			      __u32 highest_new_tsn_in_sack, __u8 pdus_sacked,
+			      bool same_path)
 {
 	char do_fast_retransmit = 0;
 	struct sctp_chunk *chunk;
@@ -1625,8 +1627,12 @@ static void sctp_mark_missing(struct sctp_outq *q,
 			/* SFR may require us to skip marking this chunk as
 			 * missing.
 			 */
-			if (sctp_sfr_hit(transport, tsn)) {
-				chunk->tsn_missing_report++;
+			if (transport->sfr.saw_newack) {
+				if (same_path && TSN_lt(tsn, transport->sfr.earliest_tsn))
+					chunk->tsn_missing_report =
+						min(chunk->tsn_missing_report + pdus_sacked, 3);
+				else
+					chunk->tsn_missing_report++;
 
 				pr_debug("%s: tsn:0x%x missing counter:%d\n",
 					 __func__, tsn, chunk->tsn_missing_report);

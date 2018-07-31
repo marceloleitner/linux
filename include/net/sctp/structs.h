@@ -959,6 +959,9 @@ struct sctp_transport {
 		 * a SACK to estimate the causative TSN(s)'s group.
 		 */
 		char saw_newack;
+
+		/* Earliest SACKed TSN, for DAC handling */
+		__u32 earliest_tsn;
 	} sfr;
 
 	/* 64-bit random number sent with heartbeat. */
