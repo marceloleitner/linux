@@ -640,7 +640,8 @@ struct sctp_chunk {
 
 	/* For an inbound chunk, this tells us where it came from.
 	 * For an outbound chunk, it tells us where we'd like it to
-	 * go.	It is NULL if we have no preference.
+	 * go.	It is NULL if we have no preference. After sending,
+	 * it records on which transport it was last sent.
 	 */
 	struct sctp_transport *transport;
 
@@ -945,34 +946,20 @@ struct sctp_transport {
 	/* This is the list of transports that have chunks to send.  */
 	struct list_head send_ready;
 
-	/* State information saved for SFR_CACC algorithm. The key
-	 * idea in SFR_CACC is to maintain state at the sender on a
-	 * per-destination basis when a changeover happens.
-	 *	char changeover_active;
-	 *	char cycling_changeover;
-	 *	__u32 next_tsn_at_change;
-	 *	char cacc_saw_newack;
+	/* State information saved for SFR algorithm. The key
+	 * idea in SFR is to understand if SACK GAPs are due
+	 * to reordering on multi-path transmission or not,
+	 * being it because of CMT or just path changeover.
 	 */
 	struct {
-		/* An unsigned integer, which stores the next TSN to be
-		 * used by the sender, at the moment of changeover.
-		 */
-		__u32 next_tsn_at_change;
-
-		/* A flag which indicates the occurrence of a changeover */
-		char changeover_active;
-
-		/* A flag which indicates whether the change of primary is
-		 * the first switch to this destination address during an
-		 * active switch.
-		 */
-		char cycling_changeover;
+		/* Highest TSN acked per destination by the SACK being processed. */
+		__u32 highest_in_sack;
 
 		/* A temporary flag, which is used during the processing of
 		 * a SACK to estimate the causative TSN(s)'s group.
 		 */
-		char cacc_saw_newack;
-	} cacc;
+		char saw_newack;
+	} sfr;
 
 	/* 64-bit random number sent with heartbeat. */
 	__u64 hb_nonce;
