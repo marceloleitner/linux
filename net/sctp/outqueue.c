@@ -1752,9 +1752,8 @@ static void sctp_mark_missing(struct sctp_outq *q,
 			/* SFR-CACC may require us to skip marking
 			 * this chunk as missing.
 			 */
-			if (!transport || !sctp_cacc_skip(primary,
-						chunk->transport,
-						count_of_newacks, tsn)) {
+			if (!sctp_cacc_skip(primary, chunk->transport,
+					    count_of_newacks, tsn)) {
 				chunk->tsn_missing_report++;
 
 				pr_debug("%s: tsn:0x%x missing counter:%d\n",
@@ -1774,15 +1773,13 @@ static void sctp_mark_missing(struct sctp_outq *q,
 		}
 	}
 
-	if (transport) {
-		if (do_fast_retransmit)
-			sctp_retransmit(q, transport, SCTP_RTXR_FAST_RTX);
+	if (do_fast_retransmit)
+		sctp_retransmit(q, transport, SCTP_RTXR_FAST_RTX);
 
-		pr_debug("%s: transport:%p, cwnd:%d, ssthresh:%d, "
-			 "flight_size:%d, pba:%d\n",  __func__, transport,
-			 transport->cwnd, transport->ssthresh,
-			 transport->flight_size, transport->partial_bytes_acked);
-	}
+	pr_debug("%s: transport:%p, cwnd:%d, ssthresh:%d, "
+		 "flight_size:%d, pba:%d\n",  __func__, transport,
+		 transport->cwnd, transport->ssthresh,
+		 transport->flight_size, transport->partial_bytes_acked);
 }
 
 /* Is the given TSN acked by this packet?  */
