@@ -857,6 +857,12 @@ struct sctp_transport {
 
 	__u32 burst_limited;	/* Holds old cwnd when max.burst is applied */
 
+	/* TSN marking the fast recovery exit point */
+	__u32 fast_recovery_exit;
+
+	/* Flag to track the current fast recovery state */
+	__u8 fast_recovery;
+
 	/* Destination */
 	struct dst_entry *dst;
 	/* Source address. */
@@ -1810,12 +1816,6 @@ struct sctp_association {
 
 	/* Highest TSN that is acknowledged by incoming SACKs. */
 	__u32 highest_sacked;
-
-	/* TSN marking the fast recovery exit point */
-	__u32 fast_recovery_exit;
-
-	/* Flag to track the current fast recovery state */
-	__u8 fast_recovery;
 
 	/* DAC: how many PDUs we received since we last sent a SACK */
 	__u8 new_pdus;

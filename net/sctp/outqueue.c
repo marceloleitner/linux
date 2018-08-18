@@ -1336,13 +1336,17 @@ int sctp_outq_sack(struct sctp_outq *q, struct sctp_chunk *chunk)
 	if (gap_ack_blocks) {
 		__u8 pdus_sacked = chunk->chunk_hdr->flags;
 
-		if (asoc->fast_recovery && accum_moved)
-			highest_new_tsn = highest_tsn;
+		list_for_each_entry(transport, transport_list, transports) {
+			__u32 htsn = highest_new_tsn;
 
-		list_for_each_entry(transport, transport_list, transports)
+			/* Undo if it in fast recovery. FIXME: why? */
+			if (transport->fast_recovery && accum_moved)
+				htsn = highest_tsn;
+
 			sctp_mark_missing(q, &transport->transmitted, transport,
-					  highest_new_tsn, pdus_sacked,
+					  htsn, pdus_sacked,
 					  active_transports == 1);
+		}
 	}
 
 	/* Update unack_data field in the assoc. */

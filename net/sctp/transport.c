@@ -403,16 +403,15 @@ void sctp_transport_update_rto(struct sctp_transport *tp, __u32 rtt)
 void sctp_transport_raise_cwnd(struct sctp_transport *transport,
 			       __u32 sack_ctsn, __u32 bytes_acked)
 {
-	struct sctp_association *asoc = transport->asoc;
 	__u32 cwnd, ssthresh, flight_size, pba, pmtu;
 
 	cwnd = transport->cwnd;
 	flight_size = transport->flight_size;
 
 	/* See if we need to exit Fast Recovery first */
-	if (asoc->fast_recovery &&
-	    TSN_lte(asoc->fast_recovery_exit, sack_ctsn))
-		asoc->fast_recovery = 0;
+	if (transport->fast_recovery &&
+	    TSN_lte(transport->fast_recovery_exit, sack_ctsn))
+		transport->fast_recovery = 0;
 
 	ssthresh = transport->ssthresh;
 	pba = transport->partial_bytes_acked;
@@ -433,7 +432,7 @@ void sctp_transport_raise_cwnd(struct sctp_transport *transport,
 		 *    2) the destination's path MTU.  This upper bound protects
 		 *    against the ACK-Splitting attack outlined in [SAVAGE99].
 		 */
-		if (asoc->fast_recovery)
+		if (transport->fast_recovery)
 			return;
 
 		/* The appropriate cwnd increase algorithm is performed
@@ -517,7 +516,7 @@ void sctp_transport_lower_cwnd(struct sctp_transport *transport,
 		transport->cwnd = asoc->pathmtu;
 
 		/* T3-rtx also clears fast recovery */
-		asoc->fast_recovery = 0;
+		transport->fast_recovery = 0;
 		break;
 
 	case SCTP_LOWER_CWND_FAST_RTX:
@@ -533,12 +532,12 @@ void sctp_transport_lower_cwnd(struct sctp_transport *transport,
 		 *      cwnd = ssthresh
 		 *      partial_bytes_acked = 0
 		 */
-		if (asoc->fast_recovery)
+		if (transport->fast_recovery)
 			return;
 
 		/* Mark Fast recovery */
-		asoc->fast_recovery = 1;
-		asoc->fast_recovery_exit = asoc->next_tsn - 1;
+		transport->fast_recovery = 1;
+		transport->fast_recovery_exit = asoc->next_tsn - 1;
 
 		transport->ssthresh = max(transport->cwnd/2,
 					  4*asoc->pathmtu);
